@@ -1215,8 +1215,16 @@ pub mod pallet {
 	#[pallet::getter(fn current_planned_session)]
 	pub type CurrentPlannedSession<T> = StorageValue<_, SessionIndex, ValueQuery>;
 
+	/// Indices of validators that have offended in the current era and whether they are currently
+	/// disabled.
+	///
+	/// This value should be a superset of disabled validators since not all offences lead to the
+	/// validator being disabled (if there was no slash). This is needed to track the percentage
+	/// of validators that have offended in the current era, ensuring a new era is forced if
+	/// `OffendingValidatorsThreshold` is reached. The set is cleared when the era ends.
 	#[pallet::storage]
-	pub(crate) type OffendingValidators<T: Config> = StorageValue<_, Vec<u32>, ValueQuery>;
+	#[pallet::getter(fn offending_validators)]
+	pub(crate) type OffendingValidators<T: Config> = StorageValue<_, Vec<(u32, bool)>, ValueQuery>;
 
 	/// True if network has been upgraded to this version.
 	/// Storage version of the pallet.
@@ -2566,6 +2574,13 @@ impl<T: Config> Pallet<T> {
 				Self::start_era(start_session);
 			}
 		}
+
+		// disable all offending validators that have been disabled for the whole era
+		for (index, disabled) in <OffendingValidators<T>>::get() {
+			if disabled {
+				T::SessionInterface::disable_validator(index as usize);
+			}
+		}
 	}
 
 	/// End a session potentially ending an era.
@@ -2578,8 +2593,6 @@ impl<T: Config> Pallet<T> {
 					Self::end_era(active_era, session_index);
 				}
 			}
-
-			<OffendingValidators<T>>::take();
 		}
 	}
 
@@ -2639,6 +2652,9 @@ impl<T: Config> Pallet<T> {
 			// Set ending era reward.
 			<ErasValidatorReward<T>>::insert(&active_era.index, validator_payout);
 			T::RewardRemainder::on_unbalanced(T::Currency::issue(rest));
+
+			// Clear offending validators.
+			<OffendingValidators<T>>::take();
 		}
 	}
 
